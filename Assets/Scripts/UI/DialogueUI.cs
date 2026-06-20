@@ -33,6 +33,8 @@ public class DialogueUI : MonoBehaviour
 
     private Character _activeCharacter;
     private bool _waiting;
+    private bool _introMode;
+    private System.Action _onIntroDone;
 
     void Awake()
     {
@@ -57,6 +59,27 @@ public class DialogueUI : MonoBehaviour
         _inputField.ActivateInputField();
 
         EventBus.Publish(new CharacterMetEvent(characterId));
+    }
+
+    // Called by IntroSequence — shows a scripted opening line then waits for one LLM exchange.
+    public void OpenForIntro(Character character, string openingLine, System.Action onExchangeDone)
+    {
+        _activeCharacter = character;
+        _introMode = true;
+        _onIntroDone = onExchangeDone;
+
+        LoadPortrait(character.Id);
+        Refresh();
+
+        _closeButton.interactable = false;
+        gameObject.SetActive(true);
+
+        AddBubble(openingLine, isPlayer: false);
+
+        _inputField.Select();
+        _inputField.ActivateInputField();
+
+        EventBus.Publish(new CharacterMetEvent(character.Id));
     }
 
     void LoadPortrait(string characterId)
@@ -102,16 +125,27 @@ public class DialogueUI : MonoBehaviour
         var streamBubble = AddBubble("", isPlayer: false);
         var streamLabel  = streamBubble.GetComponentInChildren<TextMeshProUGUI>();
 
+        bool wasIntro = _introMode;
+        _introMode = false; // consume flag before async callback fires
+
         GameManager.Instance.Navigator.SpeakTo(
             _activeCharacter.Id,
             text,
             onDone: reply =>
             {
                 SetWaiting(false);
-                // Final reply replaces accumulated chunks (handles any ordering edge cases)
                 streamLabel.text = reply;
                 Refresh();
                 StartCoroutine(ScrollToBottom());
+
+                if (wasIntro)
+                {
+                    // Lock input — IntroSequence will close the panel after its delay
+                    _inputField.interactable = false;
+                    _sendButton.interactable = false;
+                    _onIntroDone?.Invoke();
+                    _onIntroDone = null;
+                }
             },
             onChunk: chunk =>
             {
@@ -153,6 +187,11 @@ public class DialogueUI : MonoBehaviour
     public void Close()
     {
         _activeCharacter = null;
+        _introMode = false;
+        _onIntroDone = null;
+        _closeButton.interactable = true;
+        _inputField.interactable = true;
+        _sendButton.interactable = true;
         gameObject.SetActive(false);
     }
 }

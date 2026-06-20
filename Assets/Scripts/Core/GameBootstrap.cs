@@ -1,3 +1,4 @@
+using System.Collections;
 using UnityEngine;
 
 // Attach this to an empty "Bootstrap" GameObject in your Main scene.
@@ -15,24 +16,43 @@ public class GameBootstrap : MonoBehaviour
     [SerializeField] DialogueUI dialogueUI;
     [SerializeField] FactionStatusUI factionStatusUI;
 
+    [Header("Intro")]
+    [SerializeField] IntroSequence introSequence;
+
     void Start()
     {
-        // Validate critical references
         if (gameManager == null)
         {
-            Debug.LogError("[Bootstrap] GameManager not assigned. Create a 'GameManager' GameObject and assign it.");
+            Debug.LogError("[Bootstrap] GameManager not assigned.");
             return;
         }
-
         if (llmService == null)
         {
             Debug.LogError("[Bootstrap] LLMService not assigned.");
             return;
         }
 
-        EventBus.Publish(new GameStartedEvent());
+        // Skip intro if a save exists — player is continuing a run
+        bool hasSave = SaveSystem.SaveExists();
 
-        if (SaveSystem.SaveExists())
+        if (introSequence != null && !hasSave)
+            StartCoroutine(RunIntro());
+        else
+            FinishBoot(hasSave);
+    }
+
+    IEnumerator RunIntro()
+    {
+        yield return introSequence.Run(); // fires GameStartedEvent internally at beat 3
+        FinishBoot(false);
+    }
+
+    void FinishBoot(bool loadSave)
+    {
+        if (introSequence == null || loadSave)
+            EventBus.Publish(new GameStartedEvent());
+
+        if (loadSave)
             SaveSystem.Load();
 
         Debug.Log("[Bootstrap] AetherThrone initialised.");

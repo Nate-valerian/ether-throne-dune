@@ -1,5 +1,17 @@
 # AetherThrone — Changelog
 
+## [0.5.0] — 2026-06-20 Intro sequence
+
+### Added
+
+- `Assets/Scripts/UI/IntroSequence.cs` — 3-beat opening sequence:
+  - Beat 1: full-screen black overlay + lore text crawl (fade in/hold/fade out)
+  - Beat 2: forced DialogueUI on Vael with scripted opening monologue; player sends one message, LLM responds, panel locks
+  - Beat 3: fires `GameStartedEvent`, fades out overlay to reveal galaxy map
+- `GameBootstrap` — new `introSequence` field; routes through intro on first boot; skips if save file exists; `FinishBoot()` helper keeps logic clean
+- `DialogueUI.OpenForIntro()` — opens panel with scripted first line, disables close button, fires callback after one LLM exchange; `Close()` resets all intro state
+- `SCENE_SETUP.md` — added `IntroOverlay` to Canvas hierarchy, setup instructions, Inspector wiring table
+
 ## [0.4.0] — 2026-06-20 Lore pass: Dune-parallel narrative
 
 ### Changed — Star Systems

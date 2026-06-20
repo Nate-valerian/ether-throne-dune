@@ -25,7 +25,7 @@ Main (Scene)
 │   ├── WarSystem       [WarSystem.cs]
 │   └── Relationships   [RelationshipSystem.cs]
 ├── LLMService  [LLMService.cs]
-├── Bootstrap   [GameBootstrap.cs]
+├── Bootstrap   [GameBootstrap.cs + IntroSequence.cs]
 └── Canvas  (Screen Space — Overlay)
     ├── EventSystem
     ├── GalaxyUI        [GalaxyUI.cs]
@@ -45,19 +45,36 @@ Main (Scene)
     │   ├── Title          (TextMeshProUGUI)
     │   ├── OfferContainer (VerticalLayoutGroup)
     │   └── CloseButton    (Button)
-    └── DialogueUI       [DialogueUI.cs]       (active: false)
-        ├── Portrait          (Image)
-        ├── CharacterName     (TextMeshProUGUI)
-        ├── StageBadge        (TextMeshProUGUI)
-        ├── BondBar           (Slider)
-        ├── BondLabel         (TextMeshProUGUI)
-        ├── HistoryContainer  (VerticalLayoutGroup + ContentSizeFitter)
-        ├── HistoryScroll     (ScrollRect — wraps HistoryContainer)
-        ├── InputField        (TMP_InputField)
-        ├── SendButton        (Button)
-        ├── CloseButton       (Button)
-        └── ThinkingIndicator (GameObject — spinner or "..." image, hidden by default)
+    ├── DialogueUI       [DialogueUI.cs]       (active: false)
+    │   ├── Portrait          (Image)
+    │   ├── CharacterName     (TextMeshProUGUI)
+    │   ├── StageBadge        (TextMeshProUGUI)
+    │   ├── BondBar           (Slider)
+    │   ├── BondLabel         (TextMeshProUGUI)
+    │   ├── HistoryContainer  (VerticalLayoutGroup + ContentSizeFitter)
+    │   ├── HistoryScroll     (ScrollRect — wraps HistoryContainer)
+    │   ├── InputField        (TMP_InputField)
+    │   ├── SendButton        (Button)
+    │   ├── CloseButton       (Button)
+    │   └── ThinkingIndicator (GameObject — spinner or "..." image, hidden by default)
+    └── IntroOverlay     [CanvasGroup]  (active: true — IntroSequence controls visibility)
+        └── LoreText     (TextMeshProUGUI — centred, white, font size ~32, alpha starts 0)
 ```
+
+### IntroOverlay setup
+
+- **IntroOverlay**: full-screen Image (black, `#000000`), stretch-to-fill anchors, `CanvasGroup` component, `Sort Order` highest so it renders above everything
+- **LoreText**: centred TextMeshProUGUI, white colour, font size 28–36, `Alignment: Center/Middle`, `Word Wrap: on`, `alpha: 0` (IntroSequence fades it in)
+- Add `IntroSequence.cs` to the **Bootstrap** GameObject alongside `GameBootstrap.cs`
+
+### Inspector wiring for Bootstrap
+
+| Field                         | Target                              |
+|-------------------------------|-------------------------------------|
+| `introSequence._overlay`      | IntroOverlay (CanvasGroup)          |
+| `introSequence._loreText`     | LoreText (TextMeshProUGUI)          |
+| `introSequence._dialogueUI`   | DialogueUI panel                    |
+| `gameBootstrap.introSequence` | Bootstrap (IntroSequence component) |
 
 ## Prefabs to create
 
