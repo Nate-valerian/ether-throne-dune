@@ -38,11 +38,56 @@ public class DialogueUI : MonoBehaviour
 
     void Awake()
     {
+        if (_historyScroll != null && _historyContainer != null)
+            _historyScroll.content = _historyContainer as RectTransform;
+
+        BootstrapInputField();
+
         _sendButton.onClick.AddListener(OnSend);
         _closeButton.onClick.AddListener(Close);
         _inputField.onSubmit.AddListener(_ => OnSend());
         EventBus.Subscribe<RelationshipChangedEvent>(OnBondChanged);
-        gameObject.SetActive(false);
+    }
+
+    // TMP_InputField added via API has no child Text/Placeholder objects — create them here.
+    void BootstrapInputField()
+    {
+        if (_inputField == null || _inputField.textComponent != null) return;
+
+        var textAreaGO = new GameObject("Text Area", typeof(RectTransform), typeof(RectMask2D));
+        textAreaGO.transform.SetParent(_inputField.transform, false);
+        var areaRT = textAreaGO.GetComponent<RectTransform>();
+        areaRT.anchorMin = Vector2.zero;
+        areaRT.anchorMax = Vector2.one;
+        areaRT.offsetMin = new Vector2(10, 6);
+        areaRT.offsetMax = new Vector2(-10, -6);
+
+        var phGO = new GameObject("Placeholder", typeof(RectTransform), typeof(TextMeshProUGUI));
+        phGO.transform.SetParent(textAreaGO.transform, false);
+        SetFullStretch(phGO.GetComponent<RectTransform>());
+        var ph = phGO.GetComponent<TextMeshProUGUI>();
+        ph.text = "Say something...";
+        ph.color = new Color(.5f, .5f, .5f, .6f);
+        ph.fontSize = 16;
+
+        var textGO = new GameObject("Text", typeof(RectTransform), typeof(TextMeshProUGUI));
+        textGO.transform.SetParent(textAreaGO.transform, false);
+        SetFullStretch(textGO.GetComponent<RectTransform>());
+        var inputText = textGO.GetComponent<TextMeshProUGUI>();
+        inputText.color = Color.white;
+        inputText.fontSize = 16;
+
+        _inputField.textViewport = areaRT;
+        _inputField.textComponent = inputText;
+        _inputField.placeholder = ph;
+    }
+
+    static void SetFullStretch(RectTransform rt)
+    {
+        rt.anchorMin = Vector2.zero;
+        rt.anchorMax = Vector2.one;
+        rt.offsetMin = Vector2.zero;
+        rt.offsetMax = Vector2.zero;
     }
 
     public void Open(string characterId)
@@ -158,7 +203,39 @@ public class DialogueUI : MonoBehaviour
     {
         var prefab = isPlayer ? _bubblePlayerPrefab : _bubbleCharacterPrefab;
         var bubble = Instantiate(prefab, _historyContainer);
-        bubble.GetComponentInChildren<TextMeshProUGUI>().text = text;
+
+        // Force bubble root to fill container width
+        var bubbleRT = bubble.GetComponent<RectTransform>();
+        bubbleRT.anchorMin = new Vector2(0, 0);
+        bubbleRT.anchorMax = new Vector2(1, 0);
+        bubbleRT.pivot     = new Vector2(0.5f, 1f);
+
+        var img = bubble.GetComponent<Image>();
+        if (img != null)
+            img.color = isPlayer
+                ? new Color(0.18f, 0.32f, 0.55f, 0.95f)
+                : new Color(0.10f, 0.10f, 0.16f, 0.95f);
+
+        // Force TMP child to fill bubble with padding
+        var label = bubble.GetComponentInChildren<TextMeshProUGUI>();
+        var labelRT = label.GetComponent<RectTransform>();
+        labelRT.anchorMin = Vector2.zero;
+        labelRT.anchorMax = Vector2.one;
+        labelRT.offsetMin = new Vector2(10, 8);
+        labelRT.offsetMax = new Vector2(-10, -8);
+
+        label.text = text;
+        label.enableWordWrapping = true;
+        label.overflowMode = TextOverflowModes.Overflow;
+        label.color = Color.white;
+        label.fontSize = 16;
+        label.autoSizeTextContainer = false;
+
+        // LayoutElement so VLG gives it preferred height
+        var le = bubble.GetComponent<LayoutElement>() ?? bubble.AddComponent<LayoutElement>();
+        le.flexibleWidth  = 1;
+        le.preferredHeight = label.preferredHeight + 16f;
+
         StartCoroutine(ScrollToBottom());
         return bubble;
     }

@@ -42,19 +42,24 @@ public class IntroSequence : MonoBehaviour
         yield return new WaitForSeconds(_textHold);
         yield return FadeGraphic(_loreText, 1f, 0f, _textFadeOut);
 
-        // Beat 2 — Vael's opening; wait for player's one exchange
-        var vael = GameManager.Instance.Relationships.GetCharacter("vael");
-        bool done = false;
-        _dialogueUI.OpenForIntro(vael, VaelOpening, () => done = true);
-        yield return new WaitUntil(() => done);
-        yield return new WaitForSeconds(1.8f);
-        _dialogueUI.Close();
-
-        // Beat 3 — fire game start, fade out overlay to reveal galaxy map
-        EventBus.Publish(new GameStartedEvent());
-        yield return new WaitForEndOfFrame(); // let GalaxyUI.BuildMap() run
+        // Fade overlay out before dialogue — player sees empty galaxy behind Vael
         yield return FadeGroup(_overlay, 1f, 0f, _overlayFadeOut);
         _overlay.gameObject.SetActive(false);
+
+        // Beat 2 — Vael's opening; wait for player's one exchange
+        var vael = GameManager.Instance?.Relationships?.GetCharacter("vael");
+        if (vael != null && _dialogueUI != null)
+        {
+            bool done = false;
+            _dialogueUI.OpenForIntro(vael, VaelOpening, () => done = true);
+            yield return new WaitUntil(() => done);
+            yield return new WaitForSeconds(1.8f);
+            _dialogueUI.Close();
+        }
+
+        // Beat 3 — fire game start so GalaxyUI.BuildMap() populates the map
+        EventBus.Publish(new GameStartedEvent());
+        yield return new WaitForEndOfFrame();
     }
 
     IEnumerator FadeGraphic(Graphic g, float from, float to, float duration)

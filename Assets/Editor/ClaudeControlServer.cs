@@ -1,4 +1,4 @@
-// ClaudeControlServer — runs an HTTP server inside the Unity Editor so
+// ClaudeControlServer v2 — runs an HTTP server inside the Unity Editor so
 // Claude Code can build the scene, wire Inspector fields, and control
 // Play mode without any manual clicking.
 //
@@ -48,9 +48,10 @@ public static class ClaudeControlServer
 
     static ClaudeControlServer()
     {
-        Application.logMessageReceived += CaptureLog;
-        EditorApplication.update       += DrainQueue;
-        EditorApplication.quitting     += Stop;
+        Application.logMessageReceived        += CaptureLog;
+        EditorApplication.update              += DrainQueue;
+        EditorApplication.quitting            += Stop;
+        AssemblyReloadEvents.beforeAssemblyReload += Stop; // release port before domain teardown
         Start();
     }
 
@@ -58,12 +59,14 @@ public static class ClaudeControlServer
     {
         if (_running) return;
         _listener = new HttpListener();
+        // Bind both IPv4 and IPv6 — localhost resolves to ::1 on some Windows machines
         _listener.Prefixes.Add($"http://localhost:{PORT}/");
+        _listener.Prefixes.Add($"http://127.0.0.1:{PORT}/");
         try
         {
             _listener.Start();
             _running = true;
-            _listenerThread = new Thread(Listen) { IsBackground = true };
+            _listenerThread = new Thread(Listen) { IsBackground = true, Name = "ClaudeControlServer" };
             _listenerThread.Start();
             Debug.Log($"[Claude] Control server listening on http://localhost:{PORT}/");
         }
@@ -91,6 +94,7 @@ public static class ClaudeControlServer
                 RouteRequest(ctx);
             }
             catch (HttpListenerException) { break; }
+            catch (ThreadAbortException)  { break; } // normal during domain reload
             catch (Exception e) { Debug.LogError($"[Claude] Listener error: {e}"); }
         }
     }
@@ -139,8 +143,7 @@ public static class ClaudeControlServer
         while (_queue.TryDequeue(out var item))
         {
             var (ctx, handler) = item;
-            var result = handler();
-            Respond(ctx, 200, result);
+            handler(); // runs dispatch + sets done so the listener thread can Respond
         }
     }
 
@@ -155,6 +158,13 @@ public static class ClaudeControlServer
         if (method == "POST" && path == "/set-field")       return SetField(body);
         if (method == "POST" && path == "/set-reference")   return SetReference(body);
         if (method == "POST" && path == "/create-prefab-instance") return InstantiatePrefab(body);
+        if (method == "POST" && path == "/reparent")        return Reparent(body);
+        if (method == "POST" && path == "/delete")          return DeleteObject(body);
+        if (method == "POST" && path == "/remove-component") return RemoveComponent(body);
+        if (method == "POST" && path == "/save-as-prefab")  return SaveAsPrefab(body);
+        if (method == "POST" && path == "/wire-prefab")     return WirePrefab(body);
+        if (method == "POST" && path == "/set-rect")        return SetRect(body);
+        if (method == "POST" && path == "/set-color")       return SetColor(body);
         if (method == "POST" && path == "/play")            return EnterPlay();
         if (method == "POST" && path == "/stop")            return ExitPlay();
         if (method == "POST" && path == "/save-scene")      return SaveScene();
@@ -193,8 +203,14 @@ public static class ClaudeControlServer
 
         if (!string.IsNullOrEmpty(parent))
         {
-            var parentGo = GameObject.Find(parent);
-            if (parentGo != null) go.transform.SetParent(parentGo.transform, false);
+            var parentGo = FindGO(parent); // FindGO finds inactive objects too
+            if (parentGo != null)
+            {
+                go.transform.SetParent(parentGo.transform, false);
+                // Parent is a UI element — upgrade this object to RectTransform
+                if (parentGo.GetComponent<RectTransform>() != null)
+                    go.AddComponent<RectTransform>();
+            }
         }
 
         Undo.RegisterCreatedObjectUndo(go, $"Create {name}");
@@ -316,6 +332,172 @@ public static class ClaudeControlServer
         return Ok($"Instantiated '{prefab.name}' as '{instance.name}'");
     }
 
+    static string Reparent(string body)
+    {
+        var d      = ParseJson(body);
+        var goName = d.GetValueOrDefault("gameObject", "");
+        var parent = d.GetValueOrDefault("parent", "");
+
+        var go = FindGO(goName);
+        if (go == null) return Error($"GameObject '{goName}' not found");
+
+        Transform parentT = null;
+        if (!string.IsNullOrEmpty(parent))
+        {
+            var parentGo = FindGO(parent);
+            if (parentGo == null) return Error($"Parent '{parent}' not found");
+            parentT = parentGo.transform;
+        }
+
+        Undo.SetTransformParent(go.transform, parentT, $"Reparent {goName}");
+        EditorUtility.SetDirty(go);
+        return Ok($"Reparented '{goName}' to '{(parentT != null ? parentT.name : "scene root")}'");
+    }
+
+    static string DeleteObject(string body)
+    {
+        var d      = ParseJson(body);
+        var goName = d.GetValueOrDefault("gameObject", "");
+
+        var go = FindGO(goName);
+        if (go == null) return Error($"GameObject '{goName}' not found");
+
+        Undo.DestroyObjectImmediate(go);
+        return Ok($"Deleted '{goName}'");
+    }
+
+    static string SetRect(string body)
+    {
+        var d      = ParseJson(body);
+        var goName = d.GetValueOrDefault("gameObject", "");
+
+        var go = FindGO(goName);
+        if (go == null) return Error($"'{goName}' not found");
+        var rt = go.GetComponent<RectTransform>();
+        if (rt == null) return Error($"'{goName}' has no RectTransform");
+
+        Undo.RecordObject(rt, $"SetRect {goName}");
+        var so = new SerializedObject(rt);
+
+        void V2(string key, string field)
+        {
+            if (!d.TryGetValue(key, out var val)) return;
+            var p = val.Split(',');
+            if (p.Length < 2) return;
+            var prop = so.FindProperty(field);
+            if (prop == null) return;
+            prop.FindPropertyRelative("x").floatValue = float.Parse(p[0], System.Globalization.CultureInfo.InvariantCulture);
+            prop.FindPropertyRelative("y").floatValue = float.Parse(p[1], System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        V2("anchorMin",        "m_AnchorMin");
+        V2("anchorMax",        "m_AnchorMax");
+        V2("anchoredPosition", "m_AnchoredPosition");
+        V2("sizeDelta",        "m_SizeDelta");
+        V2("pivot",            "m_Pivot");
+
+        so.ApplyModifiedProperties();
+        EditorUtility.SetDirty(go);
+        return Ok($"RectTransform set on '{goName}'");
+    }
+
+    static string SetColor(string body)
+    {
+        var d        = ParseJson(body);
+        var goName   = d.GetValueOrDefault("gameObject", "");
+        var compName = d.GetValueOrDefault("component", "Image");
+        var colorStr = d.GetValueOrDefault("color", "1,1,1,1");
+
+        var go = FindGO(goName);
+        if (go == null) return Error($"'{goName}' not found");
+        var comp = FindComponent(go, compName);
+        if (comp == null) return Error($"Component '{compName}' not found on '{goName}'");
+
+        var p = colorStr.Split(',');
+        if (p.Length < 3) return Error("color needs r,g,b or r,g,b,a");
+
+        float r = float.Parse(p[0], System.Globalization.CultureInfo.InvariantCulture);
+        float g = float.Parse(p[1], System.Globalization.CultureInfo.InvariantCulture);
+        float b = float.Parse(p[2], System.Globalization.CultureInfo.InvariantCulture);
+        float a = p.Length >= 4 ? float.Parse(p[3], System.Globalization.CultureInfo.InvariantCulture) : 1f;
+
+        Undo.RecordObject(comp, $"SetColor {goName}");
+        var so   = new SerializedObject(comp);
+        var prop = so.FindProperty("m_Color");
+        if (prop == null) return Error("m_Color field not found");
+        prop.FindPropertyRelative("r").floatValue = r;
+        prop.FindPropertyRelative("g").floatValue = g;
+        prop.FindPropertyRelative("b").floatValue = b;
+        prop.FindPropertyRelative("a").floatValue = a;
+        so.ApplyModifiedProperties();
+        EditorUtility.SetDirty(go);
+        return Ok($"Color set on '{goName}/{compName}'");
+    }
+
+    static string SaveAsPrefab(string body)
+    {
+        var d      = ParseJson(body);
+        var goName = d.GetValueOrDefault("gameObject", "");
+        var path   = d.GetValueOrDefault("path", "");
+
+        var go = FindGO(goName);
+        if (go == null) return Error($"GameObject '{goName}' not found");
+        if (string.IsNullOrEmpty(path)) return Error("path is required");
+
+        var dir = System.IO.Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir) && !System.IO.Directory.Exists(dir))
+            System.IO.Directory.CreateDirectory(dir);
+
+        var prefab = PrefabUtility.SaveAsPrefabAsset(go, path, out bool success);
+        if (!success || prefab == null) return Error($"Failed to save prefab at '{path}'");
+        AssetDatabase.Refresh();
+        return Ok($"Saved prefab at '{path}'");
+    }
+
+    static string WirePrefab(string body)
+    {
+        var d        = ParseJson(body);
+        var goName   = d.GetValueOrDefault("gameObject", "");
+        var compName = d.GetValueOrDefault("component", "");
+        var field    = d.GetValueOrDefault("field", "");
+        var path     = d.GetValueOrDefault("prefab", "");
+
+        var go = FindGO(goName);
+        if (go == null) return Error($"GameObject '{goName}' not found");
+
+        var comp = FindComponent(go, compName);
+        if (comp == null) return Error($"Component '{compName}' not found on '{goName}'");
+
+        var asset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(path);
+        if (asset == null) return Error($"Asset not found at '{path}'");
+
+        var so   = new SerializedObject(comp);
+        var prop = so.FindProperty(field);
+        if (prop == null) return Error($"Field '{field}' not found on {compName}");
+
+        prop.objectReferenceValue = asset;
+        so.ApplyModifiedProperties();
+        EditorUtility.SetDirty(go);
+        return Ok($"Wired {compName}.{field} → '{path}'");
+    }
+
+    static string RemoveComponent(string body)
+    {
+        var d        = ParseJson(body);
+        var goName   = d.GetValueOrDefault("gameObject", "");
+        var typeName = d.GetValueOrDefault("type", "");
+
+        var go = FindGO(goName);
+        if (go == null) return Error($"GameObject '{goName}' not found");
+
+        var comp = FindComponent(go, typeName);
+        if (comp == null) return Error($"Component '{typeName}' not found on '{goName}'");
+
+        Undo.DestroyObjectImmediate(comp);
+        EditorUtility.SetDirty(go);
+        return Ok($"Removed {typeName} from '{goName}'");
+    }
+
     static string EnterPlay()
     {
         EditorApplication.EnterPlaymode();
@@ -396,7 +578,8 @@ public static class ClaudeControlServer
             case "Transform":            return typeof(Transform);
             case "Canvas":               return typeof(Canvas);
             case "EventSystem":          return typeof(UnityEngine.EventSystems.EventSystem);
-            case "StandaloneInputModule":return typeof(UnityEngine.EventSystems.StandaloneInputModule);
+            case "StandaloneInputModule":    return typeof(UnityEngine.EventSystems.StandaloneInputModule);
+            case "InputSystemUIInputModule": return Type.GetType("UnityEngine.InputSystem.UI.InputSystemUIInputModule, Unity.InputSystem") ?? AppDomain.CurrentDomain.GetAssemblies().SelectMany(a => { try { return a.GetTypes(); } catch { return Array.Empty<Type>(); } }).FirstOrDefault(t => t.Name == "InputSystemUIInputModule");
         }
 
         // Try fully qualified name

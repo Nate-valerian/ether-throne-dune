@@ -18,7 +18,7 @@ param(
     [string]$Body = "{}"
 )
 
-$BASE = "http://localhost:7777"
+$BASE = "http://127.0.0.1:7777"  # localhost resolves to ::1 on this machine; use IP directly
 
 $routes = @{
     "ping"      = @{ method = "GET";  path = "/ping" }

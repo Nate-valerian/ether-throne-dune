@@ -6,17 +6,24 @@ using UnityEngine.Networking;
 
 // Talks to the FastAPI backend via SSE streaming (/character/stream).
 // Falls back to the non-streaming endpoint on parse failure.
+// Now also falls back to local LLM when backend is unavailable.
 public class LLMService : MonoBehaviour
 {
     public static LLMService Instance { get; private set; }
 
-    [SerializeField] private string _backendUrl = "http://localhost:8000";
+    [SerializeField] private string _backendUrl = "http://127.0.0.1:8000";
+    
+    // Reference to the local LLM service for fallback
+    private LocalLLMService _localLLMService;
 
     void Awake()
     {
         if (Instance != null) { Destroy(gameObject); return; }
         Instance = this;
         DontDestroyOnLoad(gameObject);
+        
+        // Try to get the local LLM service if available
+        _localLLMService = FindObjectOfType<LocalLLMService>();
     }
 
     // onChunk  — called for each streamed text fragment (optional, for live display)
@@ -29,7 +36,82 @@ public class LLMService : MonoBehaviour
         Action<string> onChunk = null,
         Action<string> onError = null)
     {
-        StartCoroutine(StreamRequest(character, playerMessage, onDone, onChunk, onError));
+        // If local LLM service is available, use it as fallback
+        if (_localLLMService != null)
+        {
+            // Try to call the backend first, fall back to local LLM if unavailable
+            StartCoroutine(TryBackendThenFallback(character, playerMessage, onDone, onChunk, onError));
+        }
+        else
+        {
+            // No fallback available, just try the backend
+            StartCoroutine(StreamRequest(character, playerMessage, onDone, onChunk, onError));
+        }
+    }
+
+    IEnumerator TryBackendThenFallback(
+        Character character,
+        string playerMessage,
+        Action<string> onDone,
+        Action<string> onChunk,
+        Action<string> onError)
+    {
+        // First, try the backend API
+        bool backendSuccess = false;
+        
+        StartCoroutine(StreamRequestWithResult(character, playerMessage, 
+            (result) => { 
+                backendSuccess = true; 
+                onDone?.Invoke(result); 
+            },
+            onChunk,
+            (error) => {
+                // Backend failed, try local LLM
+                if (!backendSuccess)
+                {
+                    Debug.LogWarning($"[LLM] Backend failed: {error}, falling back to local LLM");
+                    
+                    // Call the local LLM service as fallback
+                    _localLLMService.GetCharacterResponse(character, playerMessage, 
+                        onDone, onChunk, onError);
+                }
+            }));
+        
+        // Wait briefly to see if backend succeeds
+        yield return new WaitForSeconds(0.5f);
+    }
+    
+    IEnumerator StreamRequestWithResult(
+        Character character,
+        string playerMessage,
+        Action<string> onDone,
+        Action<string> onChunk,
+        Action<string> onError)
+    {
+        var payload  = BuildPayload(character, playerMessage);
+        var json     = JsonUtility.ToJson(payload);
+        var bodyRaw  = Encoding.UTF8.GetBytes(json);
+
+        using var request = new UnityWebRequest($"{_backendUrl}/character/stream", "POST");
+        request.uploadHandler   = new UploadHandlerRaw(bodyRaw);
+        request.downloadHandler = new DownloadHandlerBuffer();
+        request.SetRequestHeader("Content-Type", "application/json");
+        request.SetRequestHeader("Accept", "text/event-stream");
+
+        yield return request.SendWebRequest();
+
+        var raw = request.downloadHandler?.text ?? "";
+
+        // SSE streams close without Content-Length, causing curl/Unity transport errors.
+        // If the buffer already contains the done event the response is complete — use it.
+        if (!raw.Contains("\"done\""))
+        {
+            Debug.LogError($"[LLM] Stream request failed: {request.error}");
+            onError?.Invoke(request.error);
+            yield break;
+        }
+
+        ParseSSEResponse(raw, character, playerMessage, onDone, onChunk);
     }
 
     IEnumerator StreamRequest(
@@ -51,14 +133,18 @@ public class LLMService : MonoBehaviour
 
         yield return request.SendWebRequest();
 
-        if (request.result != UnityWebRequest.Result.Success)
+        var raw = request.downloadHandler?.text ?? "";
+
+        // SSE streams close without Content-Length, causing curl/Unity transport errors.
+        // If the buffer already contains the done event the response is complete — use it.
+        if (!raw.Contains("\"done\""))
         {
             Debug.LogError($"[LLM] Stream request failed: {request.error}");
             onError?.Invoke(request.error);
             yield break;
         }
 
-        ParseSSEResponse(request.downloadHandler.text, character, playerMessage, onDone, onChunk);
+        ParseSSEResponse(raw, character, playerMessage, onDone, onChunk);
     }
 
     void ParseSSEResponse(

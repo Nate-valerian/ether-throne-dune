@@ -3,6 +3,9 @@ import os
 from pathlib import Path
 from typing import AsyncIterator
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from anthropic import AsyncAnthropic
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -161,3 +164,8 @@ async def clear_memory(character_id: str):
 @app.get("/health")
 async def health():
     return {"status": "alive"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

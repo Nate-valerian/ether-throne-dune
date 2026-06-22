@@ -1,5 +1,94 @@
 # AetherThrone — Changelog
 
+## [0.8.4] — 2026-06-20 Fix: backend API key missing (root cause of all LLM errors)
+
+### Fixed
+
+- **All LLM calls silently failing with HTTP 500** — `ANTHROPIC_API_KEY` was not set in the backend's process environment; `AsyncAnthropic()` had no key and every `/character/stream` and `/character/respond` call failed. Root cause of all "Unknown Error", curl 18, and 0-byte stream responses.
+- **Backend now loads `.env`** — added `python-dotenv`; `main.py` calls `load_dotenv()` at startup so the key is read from `Backend/.env` automatically
+- Added `Backend/.env.example` with placeholder; copy to `.env` and fill in real key
+
+## [0.8.3] — 2026-06-20 Dialogue layout + backend startup
+
+### Fixed
+
+- **Backend exits immediately** — `main.py` had no `uvicorn.run()` entry point; added `if __name__ == "__main__": uvicorn.run(...)` so `python main.py` starts the server correctly
+- **DialogueUI Awake self-deactivates** — `Awake()` called `gameObject.SetActive(false)`; when the panel starts inactive in the scene, the first `SetActive(true)` in `OpenForIntro` triggers `Awake`, which immediately set it inactive again → `StartCoroutine` in `AddBubble` crashed. Fixed: removed `SetActive(false)` from `Awake`; scene controls initial visibility
+- **ScrollRect.m_Content not assigned** — wired in code inside `DialogueUI.Awake`: `_historyScroll.content = _historyContainer as RectTransform` so it can never be missing
+- **Intro overlay covers DialogueUI** — `IntroOverlay` is the last Canvas child (renders on top); `DialogueUI` was invisible behind it. Fixed: overlay now fades out after the lore text, before Beat 2, so Vael's dialogue panel shows against the galaxy background
+- **HistoryContainer needs VerticalLayoutGroup** — chat bubbles were stacking at origin, narrow and overlapping. Added `VerticalLayoutGroup` (child-control width + height, force-expand width, spacing 8, padding 12/8) and `ContentSizeFitter` (vertical = preferred size) to `DU_HistoryContainer`
+- **Input field invisible** — added `Image` background (dark blue-grey) to `DU_InputField`; styled `DU_SendBtn` (blue), `DU_CloseBtn` (red), `DU_Portrait` (dark placeholder)
+
+## [0.8.0] — 2026-06-20 UI layout — all panels positioned and styled
+
+### Fixed
+
+- **RectTransform missing on all pre-fix GameObjects** — 44 UI elements (GalaxyUI, HUD, EndTurnButton, SystemInfoPanel, RoutePanel, FactionStatusUI, FactionOfferUI, DialogueUI and their children) were created before the auto-upgrade was in place and had only `Transform`. Added `RectTransform` to all 44 via `/add-component`.
+- **Image missing on panel containers** — 13 panels and buttons lacked `Image` components needed for visible backgrounds and hit-testing. Added via `/add-component`.
+- **GalaxyUI Image opacity** — `GalaxyUI` is a full-screen transparent container; its auto-added Image was set to `alpha=0` so it does not occlude the 3D camera view.
+
+### Added
+
+- `fix-rects.ps1` — adds `RectTransform` to all 44 UI elements and `Image` to all 13 panels/buttons in one pass (58 API calls, 0 errors)
+- `layout-scene.ps1` — sets anchors, anchored position, size delta, pivot, and `Image.m_Color` for every panel using dot-path `/set-field` calls; all 130+ calls succeed
+- **EndTurnButton** — added `ETB_Label` child with `TextMeshProUGUI` "End Turn" text
+
+### Scene state after v0.8.0
+
+- `IntroOverlay` — full-screen black (anchors 0,0→1,1; Image alpha 1, color black)
+- `LoreText` — centred inside overlay (0.1,0.2 → 0.9,0.8)
+- `GalaxyUI` — full-screen container (transparent)
+- `MapContainer` — 70% centred (0.15,0.1 → 0.85,0.9)
+- `HUD` — top bar 50px anchored to top edge
+- `SystemInfoPanel` — right drawer (0.78,0.1 → 1,0.85), dark blue-grey
+- `RoutePanel` — centre-right popup (0.55,0.3 → 0.78,0.72), very dark
+- `FactionStatusUI` — left overlay (0 0.3 → 0.22 0.92), dark
+- `FactionOfferUI` — centre popup (0.2,0.2 → 0.8,0.8), nearly opaque
+- `DialogueUI` — centre panel (0.1,0.05 → 0.9,0.95), near-opaque dark
+
+## [0.7.0] — 2026-06-20 All 7 prefabs created and wired
+
+### Added
+
+- `Assets/Prefabs/SystemNodePrefab.prefab` — root [Image, Button] + child `Label` [TextMeshProUGUI]
+- `Assets/Prefabs/RouteLinePrefab.prefab` — root [Image, Button]
+- `Assets/Prefabs/BubblePlayerPrefab.prefab` — root [Image] + child [TextMeshProUGUI]
+- `Assets/Prefabs/BubbleCharacterPrefab.prefab` — root [Image] + child [TextMeshProUGUI]
+- `Assets/Prefabs/CharacterButtonPrefab.prefab` — root [Image, Button] + child [TextMeshProUGUI]
+- `Assets/Prefabs/FactionRowPrefab.prefab` — root [HorizontalLayoutGroup] + 5 [TextMeshProUGUI] children
+- `Assets/Prefabs/OfferRowPrefab.prefab` — root [HorizontalLayoutGroup] + 3 [TextMeshProUGUI] + 2 buttons (each with child label)
+- `create-prefabs.ps1` — creates all 7 prefabs via ClaudeControlServer `/save-as-prefab` endpoint; wires them to Inspector fields
+- `wire-all.ps1` — wires all 50 Inspector references across 8 MonoBehaviours (GameBootstrap, IntroSequence, GalaxyUI, SystemInfoPanel, RoutePanel, FactionStatusUI, FactionOfferUI, DialogueUI)
+
+### Fixed
+
+- **New server endpoints** — `/save-as-prefab`, `/wire-prefab`, `/remove-component`, `/reparent`, `/delete` added to `ClaudeControlServer.cs`
+- **IntroSequence null guard** — Beat 2 skips safely when `vael` character is null (prevents coroutine crash on inactive DialogueUI)
+- **Input System** — `ProjectSettings.asset` set to `activeInputHandler: 2` (Both); `StandaloneInputModule` restored on EventSystem
+
+## [0.6.0] — 2026-06-20 Scene fully built and wired
+
+### Added
+
+- `build-scene-full.ps1` — creates all 50+ GameObjects, adds components, wires Inspector references in one pass
+- `fix-scene.ps1` — retry script for first-pass failures
+- `reparent-scene.ps1` — moves misplaced children to correct panel parents
+
+### Fixed — ClaudeControlServer.cs
+
+- **Double-respond bug** — `DrainQueue` was calling `Respond()` AND the listener thread was calling it too → protocol violations; fixed to let only the listener thread respond
+- **Domain reload port leak** — hooked `AssemblyReloadEvents.beforeAssemblyReload` so `Stop()` is called before domain teardown; port 7777 is released properly every reload
+- **ThreadAbortException log spam** — now caught silently in `Listen()` as expected during reloads
+- **IPv6-only binding** — added `http://127.0.0.1:{PORT}/` prefix alongside `localhost` so IPv4 requests work on systems where `localhost` resolves to `::1`
+- **Inactive parent lookup** — `CreateObject` now uses `FindGO()` instead of `GameObject.Find()` so inactive panel parents can be found when creating children
+- **UI RectTransform** — `CreateObject` auto-adds `RectTransform` when the parent has one
+- **New endpoints** — `/reparent` and `/delete`; `/reparent` moves a GameObject to a new parent via `Undo.SetTransformParent`; `/delete` destroys via `Undo.DestroyObjectImmediate`
+- `claude-unity.ps1` — base URL changed from `http://localhost:7777` to `http://127.0.0.1:7777`
+
+### Scene state (all wired — prefabs still needed)
+
+Full hierarchy built: GameManager + 5 children, LLMService, Bootstrap (GameBootstrap + IntroSequence), Canvas with EventSystem + GalaxyUI (MapContainer, HUD, EndTurnButton) + SystemInfoPanel (8 children) + RoutePanel (8 children) + FactionStatusUI + FactionOfferUI (3 children) + DialogueUI (10 children) + IntroOverlay (LoreText). All Inspector references wired. Remaining: SystemNodePrefab, RouteLinePrefab, BubblePlayerPrefab, BubbleCharacterPrefab, CharacterButtonPrefab, FactionRowPrefab, OfferRowPrefab.
+
 ## [0.5.0] — 2026-06-20 Intro sequence
 
 ### Added
